@@ -11,10 +11,14 @@ if(EXISTS "${CMAKE_INSTALL_PREFIX}/@CMAKE_INSTALL_BINDIR@/pyc-opt")
   list(APPEND _pyc_execs "${CMAKE_INSTALL_PREFIX}/@CMAKE_INSTALL_BINDIR@/pyc-opt")
 endif()
 
+# Reinstalls conflict when RPATH already points at bundled copies under
+# CMAKE_INSTALL_PREFIX (e.g. libz.so.1 in both install/lib and /lib/...).
+# Prefer a path outside the install tree; fall back to the first candidate.
 file(GET_RUNTIME_DEPENDENCIES
   EXECUTABLES ${_pyc_execs}
   RESOLVED_DEPENDENCIES_VAR _pyc_runtime_deps
   UNRESOLVED_DEPENDENCIES_VAR _pyc_unresolved_deps
+  CONFLICTING_DEPENDENCIES_PREFIX _pyc_conflict
   POST_EXCLUDE_REGEXES
     ".*/ld-linux[^/]*\\.so.*"
     ".*/libc\\.so.*"
@@ -31,6 +35,23 @@ file(GET_RUNTIME_DEPENDENCIES
 if(_pyc_unresolved_deps)
   message(WARNING "pyc unresolved runtime dependencies: ${_pyc_unresolved_deps}")
 endif()
+
+foreach(_pyc_name IN LISTS _pyc_conflict_FILENAMES)
+  set(_pyc_paths "${_pyc_conflict_${_pyc_name}}")
+  set(_pyc_chosen "")
+  foreach(_pyc_path IN LISTS _pyc_paths)
+    if(NOT _pyc_path MATCHES "^${CMAKE_INSTALL_PREFIX}/")
+      set(_pyc_chosen "${_pyc_path}")
+      break()
+    endif()
+  endforeach()
+  if(NOT _pyc_chosen AND _pyc_paths)
+    list(GET _pyc_paths 0 _pyc_chosen)
+  endif()
+  if(_pyc_chosen)
+    list(APPEND _pyc_runtime_deps "${_pyc_chosen}")
+  endif()
+endforeach()
 
 foreach(_pyc_dep IN LISTS _pyc_runtime_deps)
   if(EXISTS "${_pyc_dep}")
