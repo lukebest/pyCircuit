@@ -15,6 +15,7 @@ file(GET_RUNTIME_DEPENDENCIES
   EXECUTABLES ${_pyc_execs}
   RESOLVED_DEPENDENCIES_VAR _pyc_runtime_deps
   UNRESOLVED_DEPENDENCIES_VAR _pyc_unresolved_deps
+  CONFLICTING_DEPENDENCIES_PREFIX _pyc_conflict
   POST_EXCLUDE_REGEXES
     ".*/ld-linux[^/]*\\.so.*"
     ".*/libc\\.so.*"
@@ -30,6 +31,28 @@ file(GET_RUNTIME_DEPENDENCIES
 
 if(_pyc_unresolved_deps)
   message(WARNING "pyc unresolved runtime dependencies: ${_pyc_unresolved_deps}")
+endif()
+
+# Re-entrant installs: previously bundled libs on RUNPATH collide with system
+# copies (e.g. libz.so.1). Prefer a path outside the install prefix.
+if(_pyc_conflict_FILENAMES)
+  foreach(_pyc_name IN LISTS _pyc_conflict_FILENAMES)
+    string(REGEX REPLACE "[^A-Za-z0-9]" "_" _pyc_id "${_pyc_name}")
+    set(_pyc_paths ${_pyc_conflict_${_pyc_id}})
+    set(_pyc_pick "")
+    foreach(_pyc_path IN LISTS _pyc_paths)
+      if(NOT _pyc_path MATCHES "^${CMAKE_INSTALL_PREFIX}/")
+        set(_pyc_pick "${_pyc_path}")
+        break()
+      endif()
+    endforeach()
+    if(NOT _pyc_pick AND _pyc_paths)
+      list(GET _pyc_paths 0 _pyc_pick)
+    endif()
+    if(_pyc_pick)
+      list(APPEND _pyc_runtime_deps "${_pyc_pick}")
+    endif()
+  endforeach()
 endif()
 
 foreach(_pyc_dep IN LISTS _pyc_runtime_deps)
