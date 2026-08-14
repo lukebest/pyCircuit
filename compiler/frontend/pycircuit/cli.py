@@ -165,6 +165,40 @@ def _top_name_for_build(src: Path, build: Any) -> str:
     return top_name
 
 
+def is_cycle_aware_entrypoint(build: Any) -> bool:
+    """True when ``build`` uses the cycle-aware ``build(m, domain, ...)`` signature."""
+    if not callable(build):
+        return False
+    try:
+        params = list(inspect.signature(build).parameters.values())
+    except (TypeError, ValueError):
+        return False
+    return len(params) >= 2 and params[1].name == "domain"
+
+
+def _compile_top_design(build: Any, *, top_name: str, jit_params: Mapping[str, object]) -> Design:
+    """Compile a top entrypoint, dispatching on the cycle-aware vs `@module` signature."""
+    try:
+        if is_cycle_aware_entrypoint(build):
+            from .v5 import compile_cycle_aware
+
+            cycle_circuit = compile_cycle_aware(
+                build,
+                name=top_name,
+                eager=True,
+                hierarchical=True,
+                **jit_params,
+            )
+            design_obj = getattr(cycle_circuit, "_v5_design", None)
+        else:
+            design_obj = compile(build, name=top_name, **jit_params)
+    except (DesignError, JitError) as e:
+        raise SystemExit(f"design compile failed: {e}") from e
+    if not isinstance(design_obj, Design):
+        raise SystemExit("internal error: expected Design from compile(...)")
+    return design_obj
+
+
 def _cmd_emit(args: argparse.Namespace) -> int:
     src_arg = args.python_file
     out = Path(args.output)
@@ -177,10 +211,7 @@ def _cmd_emit(args: argparse.Namespace) -> int:
 
     jit_params = _collect_jit_params(build, overrides=list(args.param or []))
     top_name = _top_name_for_build(src if src is not None else Path(src_arg.replace(".", "/") + ".py"), build)
-    try:
-        design = compile(build, name=top_name, **jit_params)
-    except (DesignError, JitError) as e:
-        raise SystemExit(f"design compile failed: {e}") from e
+    design = _compile_top_design(build, top_name=top_name, jit_params=jit_params)
 
     if isinstance(design, Design):
         out.write_text(design.emit_mlir(), encoding="utf-8")
@@ -2206,26 +2237,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
             cache_hit = False
 
     if not cache_hit:
-        try:
-            params = list(inspect.signature(build).parameters.values())
-            if len(params) >= 2 and params[1].name == "domain":
-                from .v5 import compile_cycle_aware
-
-                cycle_circuit = compile_cycle_aware(
-                    build,
-                    name=top_name,
-                    eager=True,
-                    hierarchical=True,
-                    **jit_params,
-                )
-                design_obj = getattr(cycle_circuit, "_v5_design", None)
-            else:
-                design_obj = compile(build, name=top_name, **jit_params)
-        except (DesignError, JitError) as e:
-            raise SystemExit(f"design compile failed: {e}") from e
-        if not isinstance(design_obj, Design):
-            raise SystemExit("internal error: expected Design from compile(...)")
-        design = design_obj
+        design = _compile_top_design(build, top_name=top_name, jit_params=jit_params)
         iface = _top_iface(design)
         manifest_path, manifest, module_paths, design_pyc_path = _emit_multi_pyc_artifacts(design, out_dir=out_dir)
         print("jit-cache: miss")
