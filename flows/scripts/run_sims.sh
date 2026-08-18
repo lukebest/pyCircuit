@@ -6,7 +6,6 @@ pyc_find_pycc
 
 PYTHONPATH_VAL="$(pyc_pythonpath)"
 OUT_BASE="$(pyc_out_root)/sim"
-DISCOVER="${PYC_ROOT_DIR}/flows/tools/discover_examples.py"
 mkdir -p "${OUT_BASE}"
 
 pyc_log "using pycc: ${PYCC}"
@@ -281,6 +280,9 @@ PY
   fi
 }
 
+examples_tsv="${docs_gate_dir}/discovered_examples_normal.tsv"
+pyc_discover_examples "${PYC_ROOT_DIR}/designs/examples" normal "${examples_tsv}"
+
 while IFS=$'\t' read -r name _design tb _cfg _tier; do
   [[ -n "${name}" ]] || continue
   trace_cfg=""
@@ -289,7 +291,7 @@ while IFS=$'\t' read -r name _design tb _cfg _tier; do
     [[ -f "${trace_cfg}" ]] || trace_cfg=""
   fi
   run_case_examples "example_${name}" "${tb}" "${trace_cfg}"
-done < <(python3 "${DISCOVER}" --root "${PYC_ROOT_DIR}/designs/examples" --tier normal --format tsv)
+done < "${examples_tsv}"
 
 run_case_nonexample() {
   local name="$1"

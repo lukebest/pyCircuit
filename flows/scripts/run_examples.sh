@@ -9,7 +9,6 @@ pyc_find_pycc
 
 PYTHONPATH_VAL="$(pyc_pythonpath)"
 EX_DIR="${PYC_ROOT_DIR}/designs/examples"
-DISCOVER="${PYC_ROOT_DIR}/flows/tools/discover_examples.py"
 
 if [[ ! -d "${EX_DIR}" ]]; then
   pyc_die "examples dir not found: ${EX_DIR}"
@@ -41,6 +40,10 @@ if ! python3 "${PYC_ROOT_DIR}/flows/tools/check_api_hygiene.py" \
   pyc_warn "API hygiene gate failed"
   fail=1
 fi
+
+examples_tsv="${gate_out_dir}/discovered_examples.tsv"
+pyc_discover_examples "${EX_DIR}" all "${examples_tsv}"
+cp "${examples_tsv}" "${docs_gate_dir}/discovered_examples.tsv"
 
 while IFS=$'\t' read -r bn design _tb _cfg _tier; do
   [[ -n "${bn}" ]] || continue
@@ -139,7 +142,7 @@ PY
     fail=1
   fi
 
-done < <(python3 "${DISCOVER}" --root "${EX_DIR}" --tier all --format tsv)
+done < "${examples_tsv}"
 
 # Project build flow smoke checks (multi-.pyc + parallel pycc + CMake/Ninja).
 for bex in counter huge_hierarchy_stress boundary_value_ports bundle_probe_expand trace_dsl_smoke; do
