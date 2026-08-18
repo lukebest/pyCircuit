@@ -11,6 +11,11 @@ if(EXISTS "${CMAKE_INSTALL_PREFIX}/@CMAKE_INSTALL_BINDIR@/pyc-opt")
   list(APPEND _pyc_execs "${CMAKE_INSTALL_PREFIX}/@CMAKE_INSTALL_BINDIR@/pyc-opt")
 endif()
 
+# Reinstalls conflict when RPATH already points at bundled copies under
+# CMAKE_INSTALL_PREFIX (e.g. libz.so.1 in both install/lib and /lib/...).
+# Prefer a path outside the install tree; fall back to the first candidate.
+# CMake stores conflicts as <prefix>_<sanitized_filename>, so dots in
+# sonames (libz.so.1) must be replaced before reading the variable.
 file(GET_RUNTIME_DEPENDENCIES
   EXECUTABLES ${_pyc_execs}
   RESOLVED_DEPENDENCIES_VAR _pyc_runtime_deps
@@ -33,8 +38,6 @@ if(_pyc_unresolved_deps)
   message(WARNING "pyc unresolved runtime dependencies: ${_pyc_unresolved_deps}")
 endif()
 
-# Re-entrant installs: previously bundled libs on RUNPATH collide with system
-# copies (e.g. libz.so.1). Prefer a path outside the install prefix.
 if(_pyc_conflict_FILENAMES)
   foreach(_pyc_name IN LISTS _pyc_conflict_FILENAMES)
     string(REGEX REPLACE "[^A-Za-z0-9]" "_" _pyc_id "${_pyc_name}")

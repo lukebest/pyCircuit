@@ -1,0 +1,1 @@
+BF16 FMAC demo verified by test_bf16_fmac.py against a Python float model, not a @testbench gate case.

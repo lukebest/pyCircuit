@@ -159,3 +159,30 @@ pyc_pythonpath() {
 pyc_out_root() {
   echo "${PYC_ROOT_DIR}/.pycircuit_out"
 }
+
+# Write the discovered example table to a file, failing the gate when discovery
+# errors out or yields fewer than `min` cases.
+#
+# Callers must read the table from this file rather than piping the tool through
+# process substitution: `done < <(python3 discover_examples.py ...)` discards the
+# tool's exit status, so a broken layout contract silently empties the loop.
+#
+# Usage: pyc_discover_examples <root> <tier> <out-tsv> [min]
+pyc_discover_examples() {
+  local root="$1"
+  local tier="$2"
+  local out="$3"
+  local min="${4:-1}"
+
+  if ! python3 "${PYC_ROOT_DIR}/flows/tools/discover_examples.py" \
+    --root "${root}" --tier "${tier}" --format tsv --min-cases "${min}" >"${out}"; then
+    pyc_die "example discovery failed for tier=${tier} (root: ${root})"
+  fi
+
+  local n
+  n="$(grep -c . "${out}" || true)"
+  pyc_log "discovered ${n} example case(s) (tier=${tier})"
+  if (( n < min )); then
+    pyc_die "example discovery returned ${n} case(s) for tier=${tier}, expected >= ${min}"
+  fi
+}

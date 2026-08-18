@@ -9,6 +9,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+#: Marker file declaring that a directory is outside the folderized gate contract.
+#: It must carry a non-empty reason so exemptions stay reviewable instead of silent.
+EXEMPT_MARKER = ".pyc-example-exempt"
+
+
 @dataclass(frozen=True)
 class ExampleCase:
     name: str
@@ -20,6 +25,14 @@ class ExampleCase:
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
+
+
+def _exempt_dirs(root: Path) -> list[Path]:
+    return sorted(p.parent for p in root.rglob(EXEMPT_MARKER) if p.is_file())
+
+
+def _is_exempt(path: Path, exempt: list[Path]) -> bool:
+    return any(path == d or d in path.parents for d in exempt)
 
 
 def _parse_sim_tier(cfg_path: Path) -> str:
@@ -57,9 +70,42 @@ def _parse_pyc_name(design_path: Path) -> str | None:
     return None
 
 
+def _decorator_base_name(dec: ast.expr) -> str | None:
+    target = dec.func if isinstance(dec, ast.Call) else dec
+    if isinstance(target, ast.Attribute):
+        return target.attr
+    if isinstance(target, ast.Name):
+        return target.id
+    return None
+
+
+def entrypoint_kind(path: Path) -> str | None:
+    """Classify a module as a pyCircuit design entrypoint.
+
+    Returns ``"module"`` for a classic ``@module def build(m, ...)`` design,
+    ``"cycle_aware"`` for a V5 ``def build(m, domain, ...)`` design, and ``None``
+    when the file defines no top-level ``build`` entrypoint. The signature test
+    mirrors ``pycircuit.cli.is_cycle_aware_entrypoint`` so discovery and the
+    compiler agree on what is buildable.
+    """
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    except (SyntaxError, UnicodeDecodeError):
+        return None
+
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or node.name != "build":
+            continue
+        if any(_decorator_base_name(d) == "module" for d in node.decorator_list):
+            return "module"
+        args = node.args.args
+        if len(args) >= 2 and args[1].arg == "domain":
+            return "cycle_aware"
+    return None
+
+
 def _looks_like_design(path: Path) -> bool:
-    text = path.read_text(encoding="utf-8")
-    return "@module" in text and "def build(" in text
+    return entrypoint_kind(path) is not None
 
 
 def _discover(root: Path) -> list[ExampleCase]:
@@ -70,8 +116,15 @@ def _discover(root: Path) -> list[ExampleCase]:
     cases: list[ExampleCase] = []
     names: set[str] = set()
 
+    exempt = _exempt_dirs(root)
+    for d in exempt:
+        if not (d / EXEMPT_MARKER).read_text(encoding="utf-8").strip():
+            errs.append(f"{d / EXEMPT_MARKER}: must state why this directory is outside the gate contract")
+
     for d in sorted(p for p in root.rglob("*") if p.is_dir()):
         if d.name == "__pycache__":
+            continue
+        if _is_exempt(d, exempt):
             continue
         name = d.name
         design = d / f"{name}.py"
@@ -79,8 +132,7 @@ def _discover(root: Path) -> list[ExampleCase]:
         cfg = d / f"{name}_config.py"
 
         present = [design.exists(), tb.exists(), cfg.exists()]
-        # Cycle-aware examples use their own compile_cycle_aware entrypoint and
-        # are not consumable by the @module-based folderized-example runner.
+        # A same-named module without a `build` entrypoint is a support file, not a design.
         if design.exists() and not _looks_like_design(design):
             continue
         if any(present) and not all(present):
@@ -118,10 +170,15 @@ def _discover(root: Path) -> list[ExampleCase]:
             continue
         if py.name.startswith("emulate_"):
             continue
+        if _is_exempt(py.parent, exempt):
+            continue
         if not _looks_like_design(py):
             continue
         if py.resolve() not in case_designs:
-            errs.append(f"{py}: design module is outside required folderized layout")
+            errs.append(
+                f"{py}: design module is outside required folderized layout "
+                f"(add tb_/config files, or declare the directory with {EXEMPT_MARKER})"
+            )
 
     if errs:
         raise RuntimeError("\n".join(errs))
@@ -166,13 +223,33 @@ def main(argv: list[str] | None = None) -> int:
         default="json",
         help="Output format",
     )
+    ap.add_argument(
+        "--min-cases",
+        type=int,
+        default=1,
+        help="Fail if fewer than this many examples are discovered (before tier filtering)",
+    )
     ns = ap.parse_args(argv)
 
+    root = Path(ns.root).resolve()
     try:
-        cases = _discover(Path(ns.root).resolve())
+        cases = _discover(root)
     except Exception as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
+
+    # Discovering nothing means the layout contract drifted away from the compiler,
+    # not that there is nothing to test. Never let that pass as success.
+    if len(cases) < int(ns.min_cases):
+        print(
+            f"error: discovered {len(cases)} example(s) under {root}, expected at least {ns.min_cases}",
+            file=sys.stderr,
+        )
+        return 1
+
+    for d in _exempt_dirs(root):
+        reason = (d / EXEMPT_MARKER).read_text(encoding="utf-8").strip().splitlines()[0]
+        print(f"note: {d.relative_to(root)} exempt from example gate: {reason}", file=sys.stderr)
 
     if ns.tier != "all":
         cases = [c for c in cases if c.tier == ns.tier]
